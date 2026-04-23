@@ -55,7 +55,12 @@ app.use(
         return callback(null, true);
       }
 
-      console.error("CORS blocked origin:", origin, "allowed:", normalizedAllowed);
+      console.error(
+        "CORS blocked origin:",
+        origin,
+        "allowed:",
+        normalizedAllowed
+      );
       return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
@@ -64,11 +69,17 @@ app.use(
   })
 );
 
-// Handle preflight quickly
+/**
+ * NOTE:
+ * Express/router versions sometimes throw PathError for app.options("*").
+ * Using regex is safest.
+ */
 app.options(/.*/, cors());
 
 /**
- * Routes
+ * Routes (IMPORTANT: make sure these files exist with exact casing on Render/Linux)
+ * Backend/src/routes/auth.js
+ * Backend/src/routes/interview.routes.js   (or .ts accordingly)
  */
 const authRouter = require("./routes/auth");
 const interviewRouter = require("./routes/interview.routes");
