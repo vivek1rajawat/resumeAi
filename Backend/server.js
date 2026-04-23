@@ -3,11 +3,17 @@ require("dotenv").config();
 const app = require("./src/app");
 const connectToDB = require("./src/config/database");
 
-connectToDB();
+(async () => {
+  try {
+    await connectToDB();
 
-const PORT = process.env.PORT || 3000;
+    const PORT = process.env.PORT || 3000;
 
-// ✅ Render needs binding on 0.0.0.0
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server is running on port", PORT);
-});
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log("Server is running on port", PORT);
+    });
+  } catch (err) {
+    console.error("Startup error:", err);
+    process.exit(1);
+  }
+})();
