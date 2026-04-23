@@ -17,7 +17,7 @@ async function extractTextFromPdf(buffer) {
       throw new Error("Empty PDF");
     }
 
-    console.log(" RESUME TEXT EXTRACTED");
+    console.log("RESUME TEXT EXTRACTED");
     return data.text;
   } catch (err) {
     console.log("❌ PDF ERROR:", err.message);
@@ -43,7 +43,7 @@ function extractJsonObject(text) {
     const maybeJson = clean.slice(start, end + 1);
     try {
       return JSON.parse(maybeJson);
-    } catch (err2) {
+    } catch (_) {
       return null;
     }
   }
@@ -75,10 +75,23 @@ function splitMissingRequirementsToSkillGaps(missing) {
     .map((skill) => ({ skill, severity: "medium" }));
 }
 
+function isGenAiKeyLeakedError(err) {
+  const msg = String(err?.message || "");
+  return (
+    msg.includes("reported as leaked") ||
+    msg.includes("PERMISSION_DENIED") ||
+    msg.includes("403")
+  );
+}
+
 // ===============================
-//  INTERVIEW REPORT (same as before)
+//  INTERVIEW REPORT
 // ===============================
-async function generateInterviewReport({ resume, selfDescription, jobDescription }) {
+async function generateInterviewReport({
+  resume,
+  selfDescription,
+  jobDescription,
+}) {
   const resumeText = resume ? await extractTextFromPdf(resume) : "";
 
   const prompt = `
@@ -117,7 +130,8 @@ ${jobDescription || "EMPTY"}
       contents: prompt,
     });
 
-    console.log("🤖 RAW:", response.text);
+    // NOTE: don't log full text in production (can be huge); keep it short
+    console.log("🤖 Gemini response received");
 
     const raw = extractJsonObject(response.text);
     if (!raw) throw new Error("Invalid JSON from model");
@@ -188,29 +202,76 @@ ${jobDescription || "EMPTY"}
 
     return normalized;
   } catch (err) {
-    console.log("❌ AI ERROR:", err.message);
+    if (isGenAiKeyLeakedError(err)) {
+      console.error(
+        "❌ GEMINI 403: API key reported as leaked. Replace GOOGLE_GENAI_API_KEY in Render Environment."
+      );
+    } else {
+      console.error("❌ AI ERROR:", err?.message || err);
+    }
 
+    // Fallback response (app should still work)
     return {
       matchScore: 50,
       technicalQuestions: [
-        { question: "Explain your main project", intention: "Experience", answer: "Explain clearly" },
-        { question: "How do you manage state in React?", intention: "Concept", answer: "Hooks/Context" },
-        { question: "How to optimize performance?", intention: "Skill", answer: "Memoization/lazy loading" },
-        { question: "Explain useEffect with example", intention: "Depth", answer: "Explain lifecycle" },
-        { question: "How do you handle API errors?", intention: "Practical", answer: "Try/catch + retries" },
+        {
+          question: "Explain your main project",
+          intention: "Experience",
+          answer: "Explain clearly",
+        },
+        {
+          question: "How do you manage state in React?",
+          intention: "Concept",
+          answer: "Hooks/Context",
+        },
+        {
+          question: "How to optimize performance?",
+          intention: "Skill",
+          answer: "Memoization/lazy loading",
+        },
+        {
+          question: "Explain useEffect with example",
+          intention: "Depth",
+          answer: "Explain lifecycle",
+        },
+        {
+          question: "How do you handle API errors?",
+          intention: "Practical",
+          answer: "Try/catch + retries",
+        },
       ],
       behavioralQuestions: [
-        { question: "Tell me about yourself", intention: "Communication", answer: "Explain" },
-        { question: "Describe a challenge", intention: "Problem solving", answer: "Explain" },
-        { question: "How do you learn new tech?", intention: "Growth", answer: "Explain" },
+        {
+          question: "Tell me about yourself",
+          intention: "Communication",
+          answer: "Explain",
+        },
+        {
+          question: "Describe a challenge",
+          intention: "Problem solving",
+          answer: "Explain",
+        },
+        {
+          question: "How do you learn new tech?",
+          intention: "Growth",
+          answer: "Explain",
+        },
       ],
       skillGaps: [
         { skill: "Backend depth", severity: "high" },
         { skill: "MongoDB", severity: "medium" },
       ],
       preparationPlan: [
-        { day: 1, focus: "React + JS", tasks: ["Revise hooks, closures, async/await"] },
-        { day: 2, focus: "Backend basics", tasks: ["Build Express routes + MongoDB CRUD"] },
+        {
+          day: 1,
+          focus: "React + JS",
+          tasks: ["Revise hooks, closures, async/await"],
+        },
+        {
+          day: 2,
+          focus: "Backend basics",
+          tasks: ["Build Express routes + MongoDB CRUD"],
+        },
         { day: 3, focus: "Interview prep", tasks: ["Practice questions"] },
       ],
       title: "Interview Report",
@@ -219,28 +280,43 @@ ${jobDescription || "EMPTY"}
 }
 
 // ===============================
-//  PDF GENERATOR
+//  PDF GENERATOR (Render friendly)
 // ===============================
 async function generatePdfFromHtml(html) {
-  const browser = await puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  let browser;
 
-  const page = await browser.newPage();
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      timeout: 60000,
+    });
 
-  // Better print defaults
-  await page.emulateMediaType("screen");
+    const page = await browser.newPage();
 
-  await page.setContent(html, { waitUntil: "networkidle0" });
+    // Better print defaults
+    await page.emulateMediaType("screen");
 
-  const pdfBuffer = await page.pdf({
-    format: "A4",
-    printBackground: true,
-    margin: { top: "14mm", bottom: "14mm", left: "14mm", right: "14mm" },
-  });
+    // prevent hanging forever if some resource blocks
+    await page.setContent(html, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
 
-  await browser.close();
-  return pdfBuffer;
+    // small settle time helps in server environments
+    await page.waitForTimeout(250);
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: "14mm", bottom: "14mm", left: "14mm", right: "14mm" },
+    });
+
+    return pdfBuffer;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
 }
 
 // ===============================
@@ -375,7 +451,6 @@ function renderResumeHtml(r) {
       --accent: #111827;
       --bg: #ffffff;
     }
-
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -385,47 +460,36 @@ function renderResumeHtml(r) {
       font-size: 11.2pt;
       line-height: 1.35;
     }
-
-    .page {
-      width: 100%;
-      padding: 0;
-    }
-
+    .page { width: 100%; padding: 0; }
     .header {
       padding-bottom: 10px;
       border-bottom: 2px solid var(--text);
       margin-bottom: 12px;
     }
-
     .name {
       font-size: 20pt;
       font-weight: 800;
       letter-spacing: 0.2px;
       margin: 0;
     }
-
     .headline {
       margin: 2px 0 0 0;
       font-size: 11.5pt;
       color: var(--muted);
       font-weight: 600;
     }
-
     .contact {
       margin-top: 6px;
       color: var(--muted);
       font-size: 10.5pt;
     }
-
     .contact a { color: var(--muted); text-decoration: none; }
     .contact a:hover { text-decoration: underline; }
-
     .grid {
       display: grid;
       grid-template-columns: 1fr 240px;
       gap: 14px;
     }
-
     .section { margin-bottom: 12px; }
     .section-title {
       font-weight: 800;
@@ -436,37 +500,15 @@ function renderResumeHtml(r) {
       text-transform: uppercase;
       letter-spacing: 0.6px;
     }
-
-    .item-title {
-      font-weight: 800;
-      margin: 0;
-    }
-
-    .item-meta {
-      color: var(--muted);
-      font-size: 10.5pt;
-      margin: 2px 0 0 0;
-    }
-
-    ul {
-      margin: 6px 0 0 18px;
-      padding: 0;
-    }
+    .item-title { font-weight: 800; margin: 0; }
+    .item-meta { color: var(--muted); font-size: 10.5pt; margin: 2px 0 0 0; }
+    ul { margin: 6px 0 0 18px; padding: 0; }
     li { margin: 0 0 3px 0; }
-
     .skill-row { margin-bottom: 6px; }
     .skill-title { font-weight: 800; font-size: 10.5pt; margin-bottom: 2px; }
     .skill-items { color: var(--muted); font-size: 10.5pt; }
-
-    .project-tech {
-      color: var(--muted);
-      font-size: 10.5pt;
-      margin-top: 2px;
-    }
-
+    .project-tech { color: var(--muted); font-size: 10.5pt; margin-top: 2px; }
     .small { font-size: 10.5pt; color: var(--muted); }
-
-    /* Keep it clean on print */
     @page { size: A4; margin: 14mm; }
   </style>
 </head>
@@ -475,7 +517,6 @@ function renderResumeHtml(r) {
     <div class="header">
       <h1 class="name">${escapeHtml(r.name || "Your Name")}</h1>
       <div class="headline">${escapeHtml(r.headline || "")}</div>
-
       <div class="contact">
         ${[
           r.location ? escapeHtml(r.location) : "",
@@ -489,75 +530,73 @@ function renderResumeHtml(r) {
     </div>
 
     <div class="grid">
-      <!-- LEFT -->
       <div>
         ${
           r.summary
-            ? `
-          <div class="section">
-            <div class="section-title">Summary</div>
-            <div>${escapeHtml(r.summary)}</div>
-          </div>`
+            ? `<div class="section">
+                <div class="section-title">Summary</div>
+                <div>${escapeHtml(r.summary)}</div>
+              </div>`
             : ""
         }
 
         ${
           Array.isArray(r.projects) && r.projects.length
-            ? `
-          <div class="section">
-            <div class="section-title">Projects</div>
-            ${r.projects
-              .slice(0, 3)
-              .map(
-                (p) => `
-              <div class="section" style="margin-bottom:10px;">
-                <div class="item-title">
-                  ${escapeHtml(p.name || "Project")}
-                  ${
-                    p.link
-                      ? `<span class="small"> — <a href="${escapeHtml(p.link)}">${escapeHtml(p.link)}</a></span>`
-                      : ""
-                  }
-                </div>
-                ${
-                  Array.isArray(p.tech) && p.tech.length
-                    ? `<div class="project-tech">${escapeHtml(p.tech.join(" • "))}</div>`
-                    : ""
-                }
-                ${renderList(Array.isArray(p.bullets) ? p.bullets.slice(0, 5) : [])}
-              </div>
-            `
-              )
-              .join("")}
-          </div>`
+            ? `<div class="section">
+                <div class="section-title">Projects</div>
+                ${r.projects
+                  .slice(0, 3)
+                  .map(
+                    (p) => `
+                  <div class="section" style="margin-bottom:10px;">
+                    <div class="item-title">
+                      ${escapeHtml(p.name || "Project")}
+                      ${
+                        p.link
+                          ? `<span class="small"> — <a href="${escapeHtml(p.link)}">${escapeHtml(p.link)}</a></span>`
+                          : ""
+                      }
+                    </div>
+                    ${
+                      Array.isArray(p.tech) && p.tech.length
+                        ? `<div class="project-tech">${escapeHtml(p.tech.join(" • "))}</div>`
+                        : ""
+                    }
+                    ${renderList(Array.isArray(p.bullets) ? p.bullets.slice(0, 5) : [])}
+                  </div>
+                `
+                  )
+                  .join("")}
+              </div>`
             : ""
         }
 
         ${
           Array.isArray(r.experience) && r.experience.length
-            ? `
-          <div class="section">
-            <div class="section-title">Experience</div>
-            ${r.experience
-              .slice(0, 3)
-              .map(
-                (e) => `
-              <div class="section" style="margin-bottom:10px;">
-                <div class="item-title">${escapeHtml(e.title || "")}${e.company ? ` — ${escapeHtml(e.company)}` : ""}</div>
-                <div class="item-meta">
-                  ${[e.location, [e.start, e.end].filter(Boolean).join(" - ")].filter(Boolean).map(escapeHtml).join(" | ")}
-                </div>
-                ${renderList(Array.isArray(e.bullets) ? e.bullets.slice(0, 5) : [])}
-              </div>
-            `
-              )
-              .join("")}
-          </div>`
+            ? `<div class="section">
+                <div class="section-title">Experience</div>
+                ${r.experience
+                  .slice(0, 3)
+                  .map(
+                    (e) => `
+                  <div class="section" style="margin-bottom:10px;">
+                    <div class="item-title">${escapeHtml(e.title || "")}${e.company ? ` — ${escapeHtml(e.company)}` : ""}</div>
+                    <div class="item-meta">
+                      ${[e.location, [e.start, e.end].filter(Boolean).join(" - ")]
+                        .filter(Boolean)
+                        .map(escapeHtml)
+                        .join(" | ")}
+                    </div>
+                    ${renderList(Array.isArray(e.bullets) ? e.bullets.slice(0, 5) : [])}
+                  </div>
+                `
+                  )
+                  .join("")}
+              </div>`
             : ""
         }
       </div>
 
-      <!-- RIGHT -->
       <div>
         <div class="section">
           <div class="section-title">Skills</div>
@@ -570,31 +609,29 @@ function renderResumeHtml(r) {
 
         ${
           Array.isArray(r.education) && r.education.length
-            ? `
-          <div class="section">
-            <div class="section-title">Education</div>
-            ${r.education
-              .slice(0, 2)
-              .map(
-                (ed) => `
-              <div class="section" style="margin-bottom:8px;">
-                <div class="item-title">${escapeHtml(ed.degree || "")}</div>
-                <div class="item-meta">${[ed.school, ed.location, ed.year].filter(Boolean).map(escapeHtml).join(" | ")}</div>
-              </div>
-            `
-              )
-              .join("")}
-          </div>`
+            ? `<div class="section">
+                <div class="section-title">Education</div>
+                ${r.education
+                  .slice(0, 2)
+                  .map(
+                    (ed) => `
+                  <div class="section" style="margin-bottom:8px;">
+                    <div class="item-title">${escapeHtml(ed.degree || "")}</div>
+                    <div class="item-meta">${[ed.school, ed.location, ed.year].filter(Boolean).map(escapeHtml).join(" | ")}</div>
+                  </div>
+                `
+                  )
+                  .join("")}
+              </div>`
             : ""
         }
 
         ${
           Array.isArray(r.certifications) && r.certifications.length
-            ? `
-          <div class="section">
-            <div class="section-title">Certifications</div>
-            ${renderList(r.certifications.slice(0, 6))}
-          </div>`
+            ? `<div class="section">
+                <div class="section-title">Certifications</div>
+                ${renderList(r.certifications.slice(0, 6))}
+              </div>`
             : ""
         }
       </div>
@@ -621,7 +658,13 @@ async function generateResumePdf({ resume, jobDescription, selfDescription }) {
     const html = renderResumeHtml(resumeJson);
     return generatePdfFromHtml(html);
   } catch (err) {
-    console.log("❌ RESUME AI ERROR:", err.message);
+    if (isGenAiKeyLeakedError(err)) {
+      console.error(
+        '❌ RESUME AI ERROR: API key leaked/blocked (403). Replace "GOOGLE_GENAI_API_KEY" in Render Environment.'
+      );
+    } else {
+      console.error("❌ RESUME AI ERROR:", err?.message || err);
+    }
 
     // fallback minimal nice template
     const html = renderResumeHtml({
