@@ -1,6 +1,8 @@
+console.log("APP.JS LOADED ✅ 2026-04-23");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
+
 
 const app = express();
 
