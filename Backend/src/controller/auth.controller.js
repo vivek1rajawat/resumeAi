@@ -1,121 +1,162 @@
-const userModel = require('../models/user')
-const authRouter = require('../routes/auth')
-const bcrypt = require('bcryptjs')
-const jwt = require('jsonwebtoken')
-const tokenBlacklistModel = require("../models/blacklist.model")
+const userModel = require("../models/user");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const tokenBlacklistModel = require("../models/blacklist.model");
+
+// cookie options helper
+function getCookieOptions() {
+  const isProd = process.env.NODE_ENV === "production";
+
+  return {
+    httpOnly: true,
+    secure: isProd,                 // true on Render/Vercel
+    sameSite: isProd ? "none" : "lax",
+    // 1 day cookie (match JWT expiry). Optional but recommended:
+    maxAge: 24 * 60 * 60 * 1000,
+  };
+}
 
 /**
  * @name registerUserController
- * @description register a new user, expects username, email and password in the request
- * @access public
  */
-async function registerUserController(req,res){
-    const {username, email, password} = req.body;
+async function registerUserController(req, res) {
+  try {
+    const { username, email, password } = req.body;
 
-    if(!username || !email || !password){
-        res.status(400).json({
-            message: "Please provide username, email and password"
-        })
-
+    if (!username || !email || !password) {
+      return res.status(400).json({
+        message: "Please provide username, email and password",
+      });
     }
+
     const isUserAlreadyExist = await userModel.findOne({
-        $or: [{username}, {email}]
-    })
-    if(isUserAlreadyExist){
-        res.status(400).json({
-            message: "Account already exists with this email address"
-        })
+      $or: [{ username }, { email }],
+    });
+
+    if (isUserAlreadyExist) {
+      return res.status(400).json({
+        message: "Account already exists with this email address",
+      });
     }
-    const hash = await bcrypt.hash(password,10);
+
+    const hash = await bcrypt.hash(password, 10);
+
     const user = await userModel.create({
-        username,
-        email,
-        password: hash
-    })
+      username,
+      email,
+      password: hash,
+    });
+
     const token = jwt.sign(
-        {id: user._id, username: user.username},
-        process.env.JWT_SECRET,
-        {expiresIn: "1d"}
-    )
-    res.cookie("token", token)
-    res.status(201).json({
-        message: "User regisetered successfully",
-        user: {
-            id: user._id,
-            username: user.username,
-            email: user.email
-        }
-    })
+      { id: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.cookie("token", token, getCookieOptions());
+
+    return res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+      },
+    });
+  } catch (err) {
+    console.error("registerUserController error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 }
 
 /**
  * @name loginUserController
- * @description login a user, expects email and password in the request body
- * @access public
  */
+async function loginUserController(req, res) {
+  try {
+    const { email, password } = req.body;
 
-async function loginUserController(req,res){
-    const {email, password} = req.body;
-    const user = await userModel.findOne({email})
-    if(!user){
-        return res.status(400).json({
-            message: "Invalid email and password"
-        })
+    if (!email || !password) {
+      return res.status(400).json({ message: "Please provide email and password" });
     }
-    const isPasswordValid = await bcrypt.compare(password, user.password)
-    if(!isPasswordValid){
-        return res.status(400).json({
-            message: "Invalid email or passwod"
-        })
+
+    const user = await userModel.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid email or password" });
     }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
+
     const token = jwt.sign(
-        {id: user._id, username: user.username},
-        process.env.JWT_SECRET,
-        {expiresIn: "1d"}
-    )
-    res.cookie("token", token)
-    res.status(200).json({
-        message: "User loggedIn successfully",
-        user: {
-            id: user._id,
-            username: user.username,
-            email: user.email
-        }
-    })
+      { id: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.cookie("token", token, getCookieOptions());
+
+    return res.status(200).json({
+      message: "User logged in successfully",
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+      },
+    });
+  } catch (err) {
+    console.error("loginUserController error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 }
 
-async function logoutUserController(req,res){
-    const token = req.cookies.token
-    if(token){
-        await tokenBlacklistModel.create({token})
-    }
-    res.clearCookie("token")
-    res.status(200).json({
-        message: "logged out successfully"
-    })
+async function logoutUserController(req, res) {
+  try {
+    const token = req.cookies?.token;
 
+    if (token) {
+      await tokenBlacklistModel.create({ token });
+    }
+
+    // IMPORTANT: clearCookie must use SAME options (sameSite/secure)
+    res.clearCookie("token", getCookieOptions());
+
+    return res.status(200).json({
+      message: "Logged out successfully",
+    });
+  } catch (err) {
+    console.error("logoutUserController error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 }
 
 /**
  * @name getMeController
- * @description get the current logged in user details
- * @access private
  */
-async function getMeController(req,res){
-    const user = await userModel.findById(req.user.id)
-    res.status(200).json({
-        message: "user detail fetch successfully",
-        user: {
-            id: user._id,
-            username: user.username,
-            email: user.email
-        } 
-    })
+async function getMeController(req, res) {
+  try {
+    const user = await userModel.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({
+      message: "User detail fetched successfully",
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+      },
+    });
+  } catch (err) {
+    console.error("getMeController error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 }
 
 module.exports = {
-    registerUserController,
-    loginUserController,
-    logoutUserController,
-    getMeController
-}
+  registerUserController,
+  loginUserController,
+  logoutUserController,
+  getMeController,
+};
