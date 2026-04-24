@@ -21,11 +21,9 @@ export const generateInterviewReport = async ({
   formData.append("selfDescription", selfDescription);
   formData.append("resume", resumeFile);
 
-  // ✅ baseURL already has domain, so use relative path
   const response = await api.post("/api/interview", formData, {
-    // Note: Axios sets multipart boundary automatically when FormData is used.
-    // Keeping this header is okay, but not required.
     headers: {
+      // Axios will set boundary automatically; keeping is ok
       "Content-Type": "multipart/form-data",
     },
   });
@@ -50,14 +48,24 @@ export const getAllInterviewReports = async () => {
 };
 
 /**
- * @description Service to generate resume pdf based on user self description, resume content and job description.
+ * @description Service to generate resume pdf and return it as Blob.
  */
 export const generateResumePdf = async ({ interviewReportId }) => {
   const response = await api.post(
     `/api/interview/resume/pdf/${interviewReportId}`,
     null,
-    { responseType: "blob" }
+    {
+      responseType: "blob",
+      headers: {
+        Accept: "application/pdf",
+      },
+      // withCredentials already set on api instance, but safe to keep:
+      withCredentials: true,
+      // optional: prevent caching
+      params: { t: Date.now() },
+    }
   );
 
+  // response.data is a Blob because responseType is "blob"
   return response.data;
 };

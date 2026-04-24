@@ -304,7 +304,8 @@ async function generatePdfFromHtml(html) {
     });
 
     // small settle time helps in server environments
-    await page.waitForTimeout(250);
+  // small settle time helps in server environments
+await new Promise((r) => setTimeout(r, 250));
 
     const pdfBuffer = await page.pdf({
       format: "A4",

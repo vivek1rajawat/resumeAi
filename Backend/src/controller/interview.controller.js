@@ -250,11 +250,13 @@ const generateResumePdfController = async (req, res) => {
     });
 
     res.set({
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename=resume.pdf`,
-    });
+  "Content-Type": "application/pdf",
+  "Content-Disposition": `attachment; filename="resume_${interviewReportId}.pdf"`,
+  "Content-Length": pdf.length,
+  "Cache-Control": "no-store",
+});
 
-    return res.send(pdf);
+return res.status(200).end(pdf);
   } catch (err) {
     console.log(err);
     return res.status(500).json({ message: "PDF generation failed" });
