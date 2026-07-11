@@ -237,17 +237,26 @@ const generateResumePdfController = async (req, res) => {
   try {
     const { interviewReportId } = req.params;
 
-    const report = await interviewReportModel.findById(interviewReportId);
+    const report = await interviewReportModel.findOne({
+      _id: interviewReportId,
+      user: req.user.id,
+    });
 
     if (!report) {
       return res.status(404).json({ message: "Not found" });
     }
 
-    const pdf = await generateResumePdf({
+    const { pdf, resumeJson } = await generateResumePdf({
       resume: Buffer.from(report.resume, "base64"),
       jobDescription: report.jobDescription,
       selfDescription: report.selfDescription,
+      cachedResumeJson: report.resumeJson || null,
     });
+
+    if (resumeJson && !report.resumeJson) {
+      report.resumeJson = resumeJson;
+      await report.save().catch((err) => console.log("resumeJson cache save failed:", err));
+    }
 
     res.set({
   "Content-Type": "application/pdf",

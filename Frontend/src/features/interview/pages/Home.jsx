@@ -25,7 +25,9 @@ const Home = () => {
     if (loading) {
         return (
             <main className='loading-screen'>
-                <h1>Loading your interview plan...</h1>
+                <span className='loading-screen__spinner' />
+                <h1>Just a moment…</h1>
+                <p>If you just clicked generate, we're analyzing your resume and the job description — usually about 30 seconds.</p>
             </main>
         )
     }

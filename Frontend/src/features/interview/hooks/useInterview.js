@@ -17,8 +17,16 @@ export const useInterview = () => {
     throw new Error("useInterview must be used within an InterviewProvider");
   }
 
-  const { loading, setLoading, report, setReport, reports, setReports } =
-    context;
+  const {
+    loading,
+    setLoading,
+    pdfLoading,
+    setPdfLoading,
+    report,
+    setReport,
+    reports,
+    setReports,
+  } = context;
 
   // 🔥 GENERATE REPORT
   const generateReport = async ({ jobDescription, selfDescription, resumeFile }) => {
@@ -84,7 +92,7 @@ export const useInterview = () => {
 
   // 🔥 DOWNLOAD RESUME PDF
   const getResumePdf = async (interviewReportId) => {
-    setLoading(true);
+    setPdfLoading(true);
 
     try {
       const pdfBlob = await generateResumePdf({ interviewReportId });
@@ -113,7 +121,7 @@ export const useInterview = () => {
       console.log("PDF DOWNLOAD ERROR:", error);
       alert("Failed to download PDF");
     } finally {
-      setLoading(false);
+      setPdfLoading(false);
     }
   };
 
@@ -128,6 +136,7 @@ export const useInterview = () => {
 
   return {
     loading,
+    pdfLoading,
     report,
     reports,
     generateReport,

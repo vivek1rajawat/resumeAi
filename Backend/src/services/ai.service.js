@@ -113,6 +113,20 @@ Rules:
 - Minimum 5 technical questions
 - Minimum 3 behavioral questions
 - Questions must be based on resume + job description (avoid generic)
+- "intention" must explain in 1-2 sentences exactly what the interviewer is
+  trying to assess by asking this question.
+- "answer" must be a complete, detailed MODEL ANSWER the candidate could
+  actually say out loud, not an instruction like "explain in detail" or
+  "use STAR format". Write the real answer.
+- Technical "answer": at least 80-120 words. Explain the concept/approach
+  concretely, reference specific technologies/projects from the resume or
+  job description where relevant, and include reasoning or trade-offs
+  (why this approach, what alternatives exist, when it breaks down).
+- Behavioral "answer": at least 80-120 words, written as a fully fleshed
+  out STAR story (Situation, Task, Action, Result) with specific,
+  concrete details and a measurable outcome — not a generic template.
+- Never leave "answer" as a placeholder, a single sentence, or generic
+  advice ("be confident", "explain clearly", etc).
 
 Resume:
 ${resumeText || "EMPTY"}
@@ -282,18 +296,36 @@ ${jobDescription || "EMPTY"}
 // ===============================
 //  PDF GENERATOR (Render friendly)
 // ===============================
+// Launching a headless Chromium is the single most expensive part of PDF
+// generation (multiple seconds on Render's free tier). Keep one browser
+// alive for the life of the process and only open/close a page per request.
+let browserPromise = null;
+
+async function getBrowser() {
+  if (browserPromise) {
+    const existing = await browserPromise.catch(() => null);
+    if (existing && existing.isConnected()) return existing;
+  }
+
+  browserPromise = puppeteer.launch({
+    headless: "new",
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
+    timeout: 60000,
+  });
+
+  return browserPromise;
+}
+
 async function generatePdfFromHtml(html) {
-  let browser;
+  const browser = await getBrowser();
+  const page = await browser.newPage();
 
   try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      timeout: 60000,
-    });
-
-    const page = await browser.newPage();
-
     // Better print defaults
     await page.emulateMediaType("screen");
 
@@ -302,10 +334,6 @@ async function generatePdfFromHtml(html) {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     });
-
-    // small settle time helps in server environments
-  // small settle time helps in server environments
-await new Promise((r) => setTimeout(r, 250));
 
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -316,7 +344,7 @@ await new Promise((r) => setTimeout(r, 250));
 
     return pdfBuffer;
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    await page.close().catch(() => {});
   }
 }
 
@@ -646,7 +674,15 @@ function renderResumeHtml(r) {
 // ===============================
 //  RESUME PDF (PROFESSIONAL)
 // ===============================
-async function generateResumePdf({ resume, jobDescription, selfDescription }) {
+async function generateResumePdf({ resume, jobDescription, selfDescription, cachedResumeJson }) {
+  // Reuse a previously generated resume JSON (stored on the report) instead
+  // of calling Gemini again on every download — the Gemini call is the
+  // slowest part of a repeat PDF download and the content doesn't change.
+  if (cachedResumeJson) {
+    const html = renderResumeHtml(cachedResumeJson);
+    return { pdf: await generatePdfFromHtml(html), resumeJson: cachedResumeJson };
+  }
+
   const resumeText = resume ? await extractTextFromPdf(resume) : "";
 
   try {
@@ -657,7 +693,7 @@ async function generateResumePdf({ resume, jobDescription, selfDescription }) {
     });
 
     const html = renderResumeHtml(resumeJson);
-    return generatePdfFromHtml(html);
+    return { pdf: await generatePdfFromHtml(html), resumeJson };
   } catch (err) {
     if (isGenAiKeyLeakedError(err)) {
       console.error(
@@ -684,7 +720,8 @@ async function generateResumePdf({ resume, jobDescription, selfDescription }) {
       certifications: [],
     });
 
-    return generatePdfFromHtml(html);
+    // Don't cache the fallback — a real generation should still be tried next time.
+    return { pdf: await generatePdfFromHtml(html), resumeJson: null };
   }
 }
 

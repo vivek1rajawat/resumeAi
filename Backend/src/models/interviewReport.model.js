@@ -84,6 +84,9 @@ const interviewReportSchema = new mongoose.Schema({
     behavioralQuestions: [ behavioralQuestionSchema ],
     skillGaps: [ skillGapSchema ],
     preparationPlan: [ preparationPlanSchema ],
+    resumeJson: {
+        type: mongoose.Schema.Types.Mixed,
+    },
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "users"
