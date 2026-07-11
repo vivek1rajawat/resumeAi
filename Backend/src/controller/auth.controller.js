@@ -34,9 +34,11 @@ async function registerUserController(req, res) {
     });
 
     if (isUserAlreadyExist) {
-      return res.status(400).json({
-        message: "Account already exists with this email address",
-      });
+      const message =
+        isUserAlreadyExist.email === email
+          ? "Account already exists with this email address"
+          : "This username is already taken";
+      return res.status(400).json({ message });
     }
 
     const hash = await bcrypt.hash(password, 10);
@@ -57,6 +59,7 @@ async function registerUserController(req, res) {
 
     return res.status(201).json({
       message: "User registered successfully",
+      token,
       user: {
         id: user._id,
         username: user.username,
@@ -100,6 +103,7 @@ async function loginUserController(req, res) {
 
     return res.status(200).json({
       message: "User logged in successfully",
+      token,
       user: {
         id: user._id,
         username: user.username,
@@ -114,7 +118,11 @@ async function loginUserController(req, res) {
 
 async function logoutUserController(req, res) {
   try {
-    const token = req.cookies?.token;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
+    const token = bearerToken || req.cookies?.token;
 
     if (token) {
       await tokenBlacklistModel.create({ token });

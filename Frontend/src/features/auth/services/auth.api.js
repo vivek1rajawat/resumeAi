@@ -1,10 +1,29 @@
 import axios from "axios";
 
+const TOKEN_KEY = "auth_token";
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (token) => {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+};
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL,
     withCredentials: true
 });
 
+// Cross-domain deployments (e.g. Vercel frontend + Render backend) can have
+// their auth cookie silently blocked by browser third-party cookie policies.
+// Sending the token as a Bearer header is a reliable fallback that doesn't
+// depend on cookie behavior.
+api.interceptors.request.use((config) => {
+    const token = getToken();
+    if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
 
 // REGISTER
 export async function register({ username, email, password }) {
@@ -15,6 +34,7 @@ export async function register({ username, email, password }) {
             password
         });
 
+        setToken(response.data?.token);
         return response.data;
 
     } catch (err) {
@@ -31,6 +51,7 @@ export async function login({ email, password }) {
             password
         });
 
+        setToken(response.data?.token);
         return response.data;
 
     } catch (err) {
@@ -48,6 +69,8 @@ export async function logout() {
     } catch (err) {
         console.error("Logout API Error:", err?.response?.data || err.message);
         throw err;
+    } finally {
+        clearToken();
     }
 }
 
