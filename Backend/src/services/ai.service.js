@@ -1,26 +1,45 @@
 const { GoogleGenAI } = require("@google/genai");
 const puppeteer = require("puppeteer");
 const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENAI_API_KEY,
 });
 
 // ===============================
-//  PDF → TEXT
+//  RESUME FILE → TEXT (PDF or DOCX)
 // ===============================
-async function extractTextFromPdf(buffer) {
-  try {
-    const data = await pdfParse(buffer);
+// The upload UI accepts both .pdf and .docx, but pdf-parse only reads PDF —
+// a DOCX upload was silently extracting to "" and producing a near-empty
+// resume. Dispatch on mimetype (falling back to the DOCX zip magic bytes,
+// since some browsers/proxies send a generic content-type).
+async function extractTextFromResume(buffer, mimetype = "") {
+  if (!buffer || !buffer.length) return "";
 
+  const isDocx =
+    mimetype.includes("wordprocessingml") ||
+    buffer.slice(0, 2).toString("hex") === "504b"; // "PK" zip signature
+
+  try {
+    if (isDocx) {
+      const { value } = await mammoth.extractRawText({ buffer });
+      if (!value || value.trim().length < 50) {
+        throw new Error("Empty DOCX");
+      }
+      console.log("RESUME TEXT EXTRACTED (DOCX)");
+      return value;
+    }
+
+    const data = await pdfParse(buffer);
     if (!data.text || data.text.trim().length < 50) {
       throw new Error("Empty PDF");
     }
 
-    console.log("RESUME TEXT EXTRACTED");
+    console.log("RESUME TEXT EXTRACTED (PDF)");
     return data.text;
   } catch (err) {
-    console.log("❌ PDF ERROR:", err.message);
+    console.log("❌ RESUME PARSE ERROR:", err.message);
     return "";
   }
 }
@@ -89,10 +108,11 @@ function isGenAiKeyLeakedError(err) {
 // ===============================
 async function generateInterviewReport({
   resume,
+  resumeMimeType,
   selfDescription,
   jobDescription,
 }) {
-  const resumeText = resume ? await extractTextFromPdf(resume) : "";
+  const resumeText = resume ? await extractTextFromResume(resume, resumeMimeType) : "";
 
   const prompt = `
 You are an expert interviewer and ATS analyzer.
@@ -346,6 +366,25 @@ async function generatePdfFromHtml(html) {
   } finally {
     await page.close().catch(() => {});
   }
+}
+
+// A "valid" JSON response from the model can still be practically empty
+// (e.g. when the resume file couldn't be read and no self description was
+// given). Rendering that produces a page with just "Your Name" on it, which
+// reads as a broken/blank PDF. Treat it as a failure so the caller falls
+// back instead of shipping (and caching) a near-empty resume.
+function isResumeJsonUsable(resumeJson) {
+  if (!resumeJson) return false;
+
+  const hasSummary =
+    typeof resumeJson.summary === "string" && resumeJson.summary.trim().length > 20;
+  const hasExperience = Array.isArray(resumeJson.experience) && resumeJson.experience.length > 0;
+  const hasProjects = Array.isArray(resumeJson.projects) && resumeJson.projects.length > 0;
+  const hasSkills =
+    resumeJson.skills &&
+    Object.values(resumeJson.skills).some((arr) => Array.isArray(arr) && arr.length > 0);
+
+  return hasSummary || hasExperience || hasProjects || hasSkills;
 }
 
 // ===============================
@@ -674,16 +713,18 @@ function renderResumeHtml(r) {
 // ===============================
 //  RESUME PDF (PROFESSIONAL)
 // ===============================
-async function generateResumePdf({ resume, jobDescription, selfDescription, cachedResumeJson }) {
+async function generateResumePdf({ resume, resumeMimeType, jobDescription, selfDescription, cachedResumeJson }) {
   // Reuse a previously generated resume JSON (stored on the report) instead
   // of calling Gemini again on every download — the Gemini call is the
   // slowest part of a repeat PDF download and the content doesn't change.
-  if (cachedResumeJson) {
+  // Ignore a cached result that turned out sparse/empty rather than trusting
+  // it forever — regenerate instead of repeatedly serving a blank-looking PDF.
+  if (cachedResumeJson && isResumeJsonUsable(cachedResumeJson)) {
     const html = renderResumeHtml(cachedResumeJson);
     return { pdf: await generatePdfFromHtml(html), resumeJson: cachedResumeJson };
   }
 
-  const resumeText = resume ? await extractTextFromPdf(resume) : "";
+  const resumeText = resume ? await extractTextFromResume(resume, resumeMimeType) : "";
 
   try {
     const resumeJson = await generateResumeJson({
@@ -691,6 +732,12 @@ async function generateResumePdf({ resume, jobDescription, selfDescription, cach
       jobDescription,
       selfDescription,
     });
+
+    if (!isResumeJsonUsable(resumeJson)) {
+      throw new Error(
+        "Generated resume has no usable content (empty resume text and self description?)"
+      );
+    }
 
     const html = renderResumeHtml(resumeJson);
     return { pdf: await generatePdfFromHtml(html), resumeJson };
@@ -703,16 +750,20 @@ async function generateResumePdf({ resume, jobDescription, selfDescription, cach
       console.error("❌ RESUME AI ERROR:", err?.message || err);
     }
 
-    // fallback minimal nice template
+    // fallback template — still uses whatever real info we have (self
+    // description / job description) instead of showing a bare "Your Name"
+    // page with nothing else on it.
     const html = renderResumeHtml({
       name: "Your Name",
-      headline: "Software Developer",
+      headline: jobDescription ? jobDescription.trim().split("\n")[0].slice(0, 70) : "Software Developer",
       location: "",
       email: "",
       phone: "",
       links: [],
       summary:
-        "ATS-friendly resume could not be generated automatically. Please try again or provide a cleaner PDF.",
+        selfDescription && selfDescription.trim().length > 20
+          ? selfDescription.trim()
+          : "We couldn't fully personalize this resume automatically. For best results, upload a text-based PDF resume (not a scanned image) or fill in the self-description field, then try downloading again.",
       skills: { languages: [], frameworks: [], tools: [], databases: [], other: [] },
       projects: [],
       experience: [],

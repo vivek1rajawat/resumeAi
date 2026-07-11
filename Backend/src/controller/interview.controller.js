@@ -71,9 +71,11 @@ const generateInterViewReportController = async (req, res) => {
   try {
     const { jobDescription, selfDescription } = req.body;
     const resume = req.file?.buffer;
+    const resumeMimeType = req.file?.mimetype;
 
     const report = await generateInterviewReport({
       resume,
+      resumeMimeType,
       selfDescription,
       jobDescription,
     });
@@ -166,6 +168,7 @@ const generateInterViewReportController = async (req, res) => {
       user: req.user.id,
       title: normalized.title,
       resume: resume?.toString("base64") || "",
+      resumeMimeType: resumeMimeType || "",
       selfDescription,
       jobDescription,
       matchScore: normalized.matchScore,
@@ -247,13 +250,14 @@ const generateResumePdfController = async (req, res) => {
     }
 
     const { pdf, resumeJson } = await generateResumePdf({
-      resume: Buffer.from(report.resume, "base64"),
+      resume: Buffer.from(report.resume || "", "base64"),
+      resumeMimeType: report.resumeMimeType,
       jobDescription: report.jobDescription,
       selfDescription: report.selfDescription,
       cachedResumeJson: report.resumeJson || null,
     });
 
-    if (resumeJson && !report.resumeJson) {
+    if (resumeJson && JSON.stringify(resumeJson) !== JSON.stringify(report.resumeJson || null)) {
       report.resumeJson = resumeJson;
       await report.save().catch((err) => console.log("resumeJson cache save failed:", err));
     }
